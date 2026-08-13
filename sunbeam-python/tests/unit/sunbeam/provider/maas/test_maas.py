@@ -57,6 +57,7 @@ from sunbeam.provider.maas.steps import (
     ZonesCheck,
 )
 from sunbeam.steps.juju import RemoveJujuMachineStep
+from sunbeam.steps.microceph import RemoveMicrocephOSDsStep, RemoveMicrocephUnitsStep
 from sunbeam.steps.microovn import ReapplyMicroOVNTerraformPlanStep
 from sunbeam.steps.role_distributor import (
     ReapplyRoleDistributorApplicationStep,
@@ -2592,6 +2593,39 @@ class TestRemoveNodeRoleDistributor:
         assert not any(
             isinstance(step, ReapplyMicroOVNTerraformPlanStep) for step in plan
         )
+
+
+class TestRemoveNodeMicroceph:
+    @patch("sunbeam.provider.maas.commands.JujuHelper")
+    @patch("sunbeam.provider.maas.commands.run_preflight_checks")
+    @patch("sunbeam.provider.maas.commands.run_plan")
+    def test_removes_microceph_osds_before_units(
+        self,
+        run_plan_cmd,
+        run_preflight,
+        juju_helper,
+    ):
+        deployment = Mock()
+        deployment.openstack_machines_model = "openstack-machines"
+        deployment.get_ovn_manager.return_value.get_machines.return_value = []
+
+        result = CliRunner().invoke(remove_node, ["--force", "node-1"], obj=deployment)
+
+        assert result.exit_code == 0, result.output
+        plan = run_plan_cmd.call_args_list[1][0][0]
+        osd_index = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, RemoveMicrocephOSDsStep)
+        )
+        unit_index = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, RemoveMicrocephUnitsStep)
+        )
+        assert osd_index < unit_index
+        assert plan[osd_index].node == "node-1"
+        assert plan[osd_index].force is True
 
 
 class TestIsMaasDeployment:

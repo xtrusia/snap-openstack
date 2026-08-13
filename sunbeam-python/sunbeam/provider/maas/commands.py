@@ -172,6 +172,7 @@ from sunbeam.steps.microceph import (
     CheckMicrocephDistributionStep,
     DeployMicrocephApplicationStep,
     DestroyMicrocephApplicationStep,
+    RemoveMicrocephOSDsStep,
     RemoveMicrocephUnitsStep,
     SetCephMgrPoolSizeStep,
 )
@@ -1708,6 +1709,13 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
         ),
         RemoveCinderVolumeUnitsStep(
             client, name, jhelper, deployment.openstack_machines_model
+        ),
+        RemoveMicrocephOSDsStep(
+            client,
+            name,
+            jhelper,
+            deployment.openstack_machines_model,
+            force=force,
         ),
         RemoveMicrocephUnitsStep(
             client, name, jhelper, deployment.openstack_machines_model
