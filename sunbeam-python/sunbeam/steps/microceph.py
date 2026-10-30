@@ -574,6 +574,11 @@ class ConfigureMicrocephOSDStep(BaseStep):
                 ResultType.COMPLETED or ResultType.FAILED otherwise
         """
         if not self.disks:
+            if not self.osd_disks:
+                return Result(
+                    ResultType.FAILED,
+                    "No Ceph OSD devices selected or already configured on this node",
+                )
             LOG.debug(
                 "Skipping ConfigureMicrocephOSDStep as no osd devices are selected"
             )

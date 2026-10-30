@@ -1,12 +1,15 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+import io
 import json
 from unittest.mock import Mock, patch
 
+import click
 import pytest
+from rich.console import Console
 
-from sunbeam.core.common import ResultType
+from sunbeam.core.common import ResultType, run_plan
 from sunbeam.core.juju import (
     ActionFailedException,
     ExecFailedException,
@@ -63,6 +66,56 @@ class TestConfigureMicrocephOSDStep:
         result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
+
+    @pytest.mark.parametrize("disks", [None, ""])
+    def test_is_skip_without_selected_or_existing_osds_fails(
+        self, cclient, jhelper, step_context, disks
+    ):
+        step = ConfigureMicrocephOSDStep(cclient, "test-0", jhelper, "test-model")
+        step.disks = disks
+        step.osd_disks = []
+
+        result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert "OSD" in result.message
+
+    @pytest.mark.parametrize("disks", [None, ""])
+    def test_is_skip_without_selection_keeps_existing_osds(
+        self, cclient, jhelper, step_context, disks
+    ):
+        step = ConfigureMicrocephOSDStep(cclient, "test-0", jhelper, "test-model")
+        step.disks = disks
+        step.osd_disks = ["/dev/sdb"]
+
+        assert step.is_skip(step_context).result_type == ResultType.SKIPPED
+
+    def test_is_skip_when_selected_disks_are_already_osds(
+        self, cclient, jhelper, step_context
+    ):
+        step = ConfigureMicrocephOSDStep(cclient, "test-0", jhelper, "test-model")
+        step.disks = "/dev/sdb"
+        step.osd_disks = ["/dev/sdb"]
+
+        assert step.is_skip(step_context).result_type == ResultType.SKIPPED
+
+    def test_plan_fails_if_defaults_leave_the_storage_node_without_osds(
+        self, cclient, jhelper
+    ):
+        cclient.cluster.get_node_info.return_value = {"machineid": "1"}
+        cclient.cluster.get_config.return_value = "{}"
+        jhelper.get_unit_from_machine.return_value = "microceph/0"
+        jhelper.run_action.return_value = {"osds": "[]", "unpartitioned-disks": "[]"}
+        step = ConfigureMicrocephOSDStep(
+            cclient, "test-0", jhelper, "test-model", accept_defaults=True
+        )
+
+        with pytest.raises(click.ClickException, match="No Ceph OSD devices"):
+            run_plan([step], Console(file=io.StringIO(), force_terminal=False))
+
+        jhelper.run_action.assert_called_once_with(
+            "microceph/0", "test-model", "list-disks", action_params={"host-only": True}
+        )
 
     def test_run(self, cclient, jhelper, step_context):
         step = ConfigureMicrocephOSDStep(cclient, "test-0", jhelper, "test-model")
