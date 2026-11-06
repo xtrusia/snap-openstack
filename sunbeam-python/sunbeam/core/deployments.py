@@ -173,6 +173,9 @@ def store_deployment_as_yaml(snap: Snap, deployment: Deployment) -> Path:
     openstack = snap.paths.real_home / SHARE_PATH
     openstack.mkdir(parents=True, exist_ok=True)
     path = openstack / (deployment.name + ".yaml")
+    if path == snap.paths.real_home / DEPLOYMENTS_CONFIG:
+        path = openstack / "deployment-exports" / path.name
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(deployment.dict()))
     path.chmod(0o600)
     return path
