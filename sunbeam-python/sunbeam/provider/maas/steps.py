@@ -2781,9 +2781,12 @@ class MaasConfigSRIOVStep(BaseStep):
         """Apply individual hypervisor settings."""
         self.update_status(context, "setting PCI configuration")
 
-        compute_machines = self._get_compute_machines()
-
-        pci_allowedlist, excluded_devices = self._get_pci_config(compute_machines)
+        try:
+            compute_machines = self._get_compute_machines()
+            pci_allowedlist, excluded_devices = self._get_pci_config(compute_machines)
+        except ValueError as e:
+            LOG.debug("Failed to get SR-IOV configuration", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
         # "pci_whitelist" is the persisted answer-store key from earlier
         # releases; kept as-is so upgrades don't lose an already-configured
         # allowedlist.
