@@ -2856,6 +2856,29 @@ class TestMaasConfigSRIOVStep:
             model="openstack-machines",
         )
 
+    def test_run_reports_missing_network_tag(self, mocker, step_context):
+        api = mocker.patch("sunbeam.provider.maas.client.maas_client")
+        machines_api = Mock()
+        api.connect.return_value.machines.list.__self__ = machines_api
+        machines_api._handler.read.side_effect = CallError(
+            request={"method": "GET", "uri": "http://localhost:5240/MAAS"},
+            response=Mock(status=400, reason="Bad Request"),
+            content=b"No such tag(s): 'network'.",
+            call=None,
+        )
+        maas_client = MaasClient("http://localhost:5240/MAAS", "token", "resource")
+        mocker.patch.object(MaasClient, "from_deployment", return_value=maas_client)
+        step = MaasConfigSRIOVStep(Mock(), Mock(), Mock(), "openstack-machines")
+        mocker.patch.object(step, "_get_compute_machines", return_value=[])
+        write_answers = mocker.patch("sunbeam.core.questions.write_answers")
+
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert "No such tag(s): 'network'" in result.message
+        machines_api._handler.read.assert_called_once_with(tags="network,resource")
+        write_answers.assert_not_called()
+
     @pytest.fixture
     def machine(self):
         return {
