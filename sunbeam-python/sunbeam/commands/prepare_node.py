@@ -123,7 +123,7 @@ if [ -n "$(command -v juju)" ]; then
     echo "Using existing Juju installation."
 else
     # Install the Juju snap
-    sudo snap install --channel {JUJU_CHANNEL} juju
+    sudo snap install --channel {JUJU_CHANNEL} juju || exit $?
 fi
 
 # Workaround a bug between snapd and juju
