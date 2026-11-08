@@ -104,6 +104,21 @@ class TestJujuGrantModelAccessStep:
 
 
 class TestJujuLoginStep:
+    def test_login_exits_before_password_prompt(self, step_context):
+        step = juju.JujuLoginStep(Mock(user="test", password="test"))
+        step._get_juju_binary = Mock(return_value="juju")
+        process = Mock(
+            before=b"Already logged in as admin. Run juju logout first.\r\n",
+            expect=Mock(side_effect=pexpect.EOF("end of file")),
+        )
+        with patch("sunbeam.steps.juju.pexpect.spawn") as spawn:
+            spawn.return_value.__enter__.return_value = process
+            result = step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert "Already logged in as admin" in result.message
+        process.sendline.assert_not_called()
+
     def test_is_skip_when_juju_account_not_present(self, step_context):
         step = juju.JujuLoginStep(None)
         assert step.is_skip(step_context).result_type == ResultType.SKIPPED
