@@ -1478,6 +1478,15 @@ class JujuLoginStep(BaseStep, JujuStepHelper):
                 process.expect("^please enter password", timeout=PEXPECT_TIMEOUT)
                 process.sendline(self.juju_account.password)
                 process.expect(pexpect.EOF, timeout=PEXPECT_TIMEOUT)
+            except pexpect.EOF:
+                LOG.debug(
+                    "Juju login exited before requesting a password", exc_info=True
+                )
+                output = process.before.decode("utf-8", errors="replace").strip()
+                return Result(
+                    ResultType.FAILED,
+                    f"Juju login exited before requesting a password: {output}",
+                )
             except pexpect.TIMEOUT as e:
                 LOG.debug("Process timeout", exc_info=True)
                 return Result(ResultType.FAILED, str(e))
