@@ -262,6 +262,77 @@ class TestRemoveCACertsFromKeystoneStep:
 
 
 class TestConfigureTLSCertificatesStep:
+    def test_prompt_skips_certificate_requests_for_other_applications(
+        self,
+        cclient,
+        jhelper,
+        question_bank,
+        load_answers,
+        write_answers,
+        get_subject_from_csr,
+        is_certificate_valid,
+        b64_encode_decode,
+    ):
+        certs_to_process = [
+            {"unit_name": "octavia/0", "csr": "octavia-csr", "relation_id": 1},
+            {"unit_name": "traefik/0", "csr": "traefik-csr", "relation_id": 2},
+        ]
+        jhelper.run_action.return_value = {
+            "return-code": 0,
+            "result": json.dumps(certs_to_process),
+        }
+        jhelper.get_relation_map.return_value = {
+            "certificates:1": "octavia",
+            "certificates:2": "traefik",
+        }
+        get_subject_from_csr.side_effect = lambda csr: csr
+        is_certificate_valid.return_value = True
+        question_bank.return_value.certificate.ask.return_value = "certificate"
+        step = tls.ConfigureTLSCertificatesStep(
+            cclient, jhelper, "fake-cert", "fake-chain"
+        )
+        step.applications = {"traefik"}
+
+        step.prompt()
+
+        question_bank.assert_called_once()
+        assert "traefik-csr" in step.process_certs
+        assert "octavia-csr" not in step.process_certs
+
+    def test_run_completes_when_all_requests_are_filtered(self, cclient, jhelper):
+        jhelper.run_action.return_value = {
+            "return-code": 0,
+            "result": json.dumps(
+                [{"unit_name": "octavia/0", "csr": "octavia-csr", "relation_id": 1}]
+            ),
+        }
+        jhelper.get_relation_map.return_value = {"certificates:1": "octavia"}
+        jhelper.get_leader_unit.return_value = "manual-tls-certificates/0"
+        step = tls.ConfigureTLSCertificatesStep(
+            cclient, jhelper, "fake-cert", applications={"traefik"}
+        )
+        with (
+            patch.object(tls.questions, "load_answers", return_value={}),
+            patch.object(tls.questions, "write_answers"),
+            patch.object(tls, "get_subject_from_csr") as get_subject,
+        ):
+            step.prompt()
+
+        result = step.run(Mock())
+
+        assert step.process_certs == {}
+        assert result.result_type == ResultType.COMPLETED
+        get_subject.assert_not_called()
+        jhelper.run_action.assert_called_once()
+
+    def test_applications_scope_is_stored(self, cclient, jhelper):
+        applications = {"traefik"}
+        step = tls.ConfigureTLSCertificatesStep(
+            cclient, jhelper, "fake-cert", applications=applications
+        )
+
+        assert step.applications == applications
+
     def test_prompt(
         self,
         cclient,
@@ -583,6 +654,76 @@ class FakeApp:
             self.units = dict(enumerate(units))
         else:
             self.units = units
+
+
+@pytest.mark.parametrize(
+    (
+        "feature_module",
+        "feature_class",
+        "storage_nodes",
+        "expected_apps",
+        "expected_wait_apps",
+    ),
+    [
+        pytest.param(
+            ca,
+            ca.CaTlsFeature,
+            [],
+            {"traefik", "traefik-public", "keystone"},
+            {"traefik", "traefik-public", "keystone"},
+            id="ca-no-storage",
+        ),
+        pytest.param(
+            ca,
+            ca.CaTlsFeature,
+            ["node"],
+            {"traefik", "traefik-public", "keystone", "traefik-rgw"},
+            {"traefik", "traefik-public", "keystone", "traefik-rgw"},
+            id="ca-with-storage",
+        ),
+        pytest.param(
+            vault,
+            vault.VaultTlsFeature,
+            [],
+            {"vault", "traefik", "traefik-public", "keystone"},
+            {"vault", "traefik", "traefik-public", "keystone"},
+            id="vault-no-storage",
+        ),
+        pytest.param(
+            vault,
+            vault.VaultTlsFeature,
+            ["node"],
+            {"vault", "traefik", "traefik-public", "keystone", "traefik-rgw"},
+            {"vault", "traefik", "traefik-public", "keystone"},
+            id="vault-with-storage",
+        ),
+    ],
+)
+def test_tls_configure_passes_certificate_applications(
+    feature_module, feature_class, storage_nodes, expected_apps, expected_wait_apps
+):
+    feature = feature_class()
+    deployment = Mock()
+    client = Mock()
+    client.cluster.list_nodes_by_role.return_value = storage_nodes
+    deployment.get_client.return_value = client
+    deployment.get_manifest.return_value.get_feature.return_value = None
+    ctx = Mock()
+    ctx.obj = deployment
+
+    with (
+        patch("click.get_current_context", return_value=ctx),
+        patch.object(feature_module, "read_config", return_value={"ca": "ca"}),
+        patch.object(feature_module, "JujuHelper"),
+        patch.object(feature_module, "AddManifestStep"),
+        patch.object(feature_module, "ConfigureTLSCertificatesStep") as cert_step,
+        patch.object(feature_module, "WaitForApplicationsStep") as wait_step,
+        patch.object(feature_module, "run_plan"),
+    ):
+        feature.configure.callback(feature, manifest_path=None, show_hints=False)
+
+    assert cert_step.call_args.kwargs["applications"] == expected_apps
+    assert set(wait_step.call_args.args[1]) == expected_wait_apps
 
 
 class TestSelfSignedTlsFeature:

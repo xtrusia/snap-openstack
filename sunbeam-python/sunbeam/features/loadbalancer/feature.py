@@ -127,6 +127,7 @@ _HEALTH_SECGROUP_KEY = "lb_health_secgroup_id"
 
 # Config key for storing certificate answers for Octavia CSRs
 AMPHORA_CERTIFICATES_CONFIG = "OctaviaCertificatesConfig"
+OCTAVIA_APP_NAME = "octavia"
 
 # Octavia workload status messages used as wait conditions
 OCTAVIA_AMPHORA_NETWORK_WAITING_MESSAGE = (
@@ -739,6 +740,9 @@ class ProvideCertificatesStep(BaseStep):
                     f"Could not map an application for relation_id={relation_id}"
                     f" unit={unit_name}"
                 )
+
+            if app_name != OCTAVIA_APP_NAME:
+                continue
 
             subject = get_subject_from_csr(csr)
             if not subject:
@@ -2081,6 +2085,7 @@ class LoadbalancerFeature(OpenStackControlPlaneFeature):
             OPENSTACK_MODEL,
             deployment,
         )
+        csrs = [record for record in csrs if record.get("app_name") == OCTAVIA_APP_NAME]
         for record in csrs:
             record["endpoint"] = (
                 "amphora-issuing-ca"

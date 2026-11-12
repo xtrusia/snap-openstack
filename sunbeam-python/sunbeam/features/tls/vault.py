@@ -329,6 +329,9 @@ class VaultTlsFeature(TlsFeature):
             preseed = ca.config.model_dump(by_alias=True)
         model = OPENSTACK_MODEL
         apps_to_monitor = [CA_APP_NAME, "traefik", "traefik-public", "keystone"]
+        certificate_apps = list(apps_to_monitor)
+        if client.cluster.list_nodes_by_role("storage"):
+            certificate_apps.append("traefik-rgw")
 
         try:
             config = read_config(client, CERTIFICATE_FEATURE_KEY)
@@ -349,6 +352,7 @@ class VaultTlsFeature(TlsFeature):
                 ca,
                 ca_chain,
                 deployment_preseed=preseed,
+                applications=set(certificate_apps),
             ),
             # On ingress change, the keystone takes time to update the service
             # endpoint, update the identity-service relation data on every
