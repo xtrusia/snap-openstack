@@ -261,6 +261,7 @@ class CaTlsFeature(TlsFeature):
                 ca,
                 ca_chain,
                 deployment_preseed=preseed,
+                applications=set(apps_to_monitor),
             ),
             # On ingress change, the keystone takes time to update the service
             # endpoint, update the identity-service relation data on every

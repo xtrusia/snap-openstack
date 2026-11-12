@@ -535,6 +535,7 @@ class ConfigureTLSCertificatesStep(BaseStep):
         ca_cert: str,
         ca_chain: str | None = None,
         deployment_preseed: dict | None = None,
+        applications: set[str] | None = None,
     ):
         super().__init__("Configure CA certs", "Configuring CA certificates")
         self.client = client
@@ -542,6 +543,7 @@ class ConfigureTLSCertificatesStep(BaseStep):
         self.ca_cert = ca_cert
         self.ca_chain = ca_chain
         self.preseed = deployment_preseed or {}
+        self.applications = applications
         self.app = CA_MANUAL_TLS_CERTIFICATE
         self.interface = CA_MANUAL_TLS_CERTIFICATE_INTERFACE
         self.model = OPENSTACK_MODEL
@@ -621,6 +623,9 @@ class ConfigureTLSCertificatesStep(BaseStep):
                 raise click.ClickException(
                     f"Could not map an application for {relation_id} {unit_name}"
                 )
+
+            if self.applications is not None and app not in self.applications:
+                continue
 
             # Each unit can have multiple CSRs
             subject = get_subject_from_csr(csr)

@@ -1025,6 +1025,43 @@ class TestAmphoraCommandsSecretsPrerequisite:
         ):
             feature.list_outstanding_csrs.callback(feature, format="table")
 
+    def test_list_outstanding_csrs_only_shows_octavia_requests(self):
+        feature = self._make_feature()
+        ctx = self._make_ctx(secrets_enabled=True)
+        ctx.obj.juju_account = "account"
+        ctx.obj.juju_controller = "controller"
+        jhelper = Mock()
+        jhelper.get_relation_map.return_value = {
+            "certificates:1": "traefik",
+            "certificates:2": "octavia",
+        }
+        with (
+            patch("click.get_current_context", return_value=ctx),
+            patch("sunbeam.features.tls.common.run_preflight_checks"),
+            patch("sunbeam.features.tls.common.JujuHelper", return_value=jhelper),
+            patch(
+                "sunbeam.features.tls.common.get_outstanding_certificate_requests",
+                return_value={
+                    "return-code": 0,
+                    "result": '[{"unit_name":"traefik/0","csr":"traefik-csr",'
+                    '"relation_id":1},{"unit_name":"octavia/0",'
+                    '"csr":"octavia-csr","relation_id":2}]',
+                },
+            ),
+            patch(
+                "sunbeam.features.loadbalancer.feature._csr_common_name",
+                return_value="CN=octavia-controller",
+            ),
+            patch(
+                "sunbeam.features.loadbalancer.feature.console.print"
+            ) as print_output,
+        ):
+            feature.list_outstanding_csrs.callback(feature, format="yaml")
+
+        output = print_output.call_args.args[0]
+        assert "app_name: octavia" in output
+        assert "app_name: traefik" not in output
+
 
 # ---------------------------------------------------------------------------
 # run_configure_plans — early-exit when amphora was never enabled
@@ -1419,6 +1456,54 @@ class TestProvideCertificatesStepRun:
             result = step.run(_make_context())
         assert result.result_type == ResultType.COMPLETED
         jhelper.wait_until_active.assert_called_once()
+
+
+class TestProvideCertificatesStepPrompt:
+    def test_prompt_skips_certificate_requests_for_other_applications(self):
+        deployment = Mock()
+        jhelper = Mock()
+        step = ProvideCertificatesStep(deployment, None, jhelper)
+        jhelper.run_action.return_value = {
+            "return-code": 0,
+            "result": '[{"unit_name":"traefik/0","csr":"csr1","relation_id":1},'
+            '{"unit_name":"octavia/0","csr":"csr2","relation_id":2}]',
+        }
+        jhelper.get_relation_map.return_value = {
+            "certificates:1": "traefik",
+            "certificates:2": "octavia",
+        }
+        bank = Mock()
+        bank.certificate.ask.return_value = "certificate"
+        bank.ca_certificate.ask.return_value = "ca-certificate"
+        bank.ca_chain.ask.return_value = ""
+        with (
+            patch(
+                "sunbeam.features.loadbalancer.feature.questions.load_answers",
+                return_value={},
+            ),
+            patch(
+                "sunbeam.features.loadbalancer.feature.questions.QuestionBank",
+                return_value=bank,
+            ) as question_bank,
+            patch(
+                "sunbeam.features.loadbalancer.feature.get_subject_from_csr",
+                side_effect=lambda csr: csr,
+            ),
+            patch(
+                "sunbeam.features.loadbalancer.feature.is_certificate_valid",
+                return_value=True,
+            ),
+            patch(
+                "sunbeam.features.loadbalancer.feature._csr_common_name",
+                return_value="CN=octavia-controller",
+            ),
+            patch("sunbeam.features.loadbalancer.feature.questions.write_answers"),
+        ):
+            step.prompt()
+
+        question_bank.assert_called_once()
+        assert "csr2" in step.process_certs
+        assert "csr1" not in step.process_certs
 
 
 # ---------------------------------------------------------------------------
