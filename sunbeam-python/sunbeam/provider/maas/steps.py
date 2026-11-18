@@ -91,6 +91,12 @@ Available roles are: {maas_deployment.RoleTags.enabled_values()}.
 Roles can be assigned to a machine by applying tags in MAAS.
 More on assigning tags: https://maas.io/docs/how-to-use-machine-tags
 """
+NETWORK_TAG_NEEDED_ERROR = (
+    f"MAAS has no {maas_deployment.RoleTags.NETWORK.value!r} tag."
+    f" Assign the {maas_deployment.RoleTags.NETWORK.value!r} tag to every machine"
+    " that provides external connectivity for instances.\n"
+    "More on assigning tags: https://maas.io/docs/how-to-use-machine-tags"
+)
 MACHINE_DEPLOY_TIMEOUT = 3600
 # "amd64" is the Debian/MAAS name for x86_64.
 DEFAULT_ARCHITECTURE = "amd64"
@@ -2565,9 +2571,13 @@ class MaasConfigSRIOVStep(BaseStep):
 
     def _dpu_parent_system_ids(self) -> set[str]:
         """Return system IDs of compute hosts that are the parent of a DPU."""
-        dpus = maas_client.list_machines(
-            self.maas_client, tags=maas_deployment.RoleTags.NETWORK.value
-        )
+        network_tag = maas_deployment.RoleTags.NETWORK.value
+        try:
+            dpus = maas_client.list_machines(self.maas_client, tags=network_tag)
+        except maas_client.TagNotFoundError as e:
+            if repr(network_tag) not in str(e):
+                raise
+            raise ValueError(NETWORK_TAG_NEEDED_ERROR) from e
         return {
             dpu["parent_system_id"]
             for dpu in dpus
