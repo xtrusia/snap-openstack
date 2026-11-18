@@ -62,6 +62,10 @@ def parse_image_name_from_tags(tag_names: list[str] | None) -> str | None:
     return matches[0] if matches else None
 
 
+class TagNotFoundError(ValueError):
+    """Raised when a machine query names a tag that MAAS does not define."""
+
+
 class MaasClient:
     """Facade to MAAS APIs."""
 
@@ -109,7 +113,7 @@ class MaasClient:
             return self._client.machines.list.__self__._handler.read(**kwargs)  # type: ignore # noqa
         except maas_bones.CallError as e:
             if "No such tag(s)" in str(e):
-                raise ValueError(str(e))
+                raise TagNotFoundError(str(e)) from e
             raise e
 
     def get_machine(self, machine: str) -> dict:

@@ -2856,6 +2856,47 @@ class TestMaasConfigSRIOVStep:
             model="openstack-machines",
         )
 
+    def _run_with_missing_tag(self, mocker, step_context, tag):
+        """Run the step against a MAAS API that rejects ``tag`` as undefined."""
+        api = mocker.patch("sunbeam.provider.maas.client.maas_client")
+        machines_api = Mock()
+        api.connect.return_value.machines.list.__self__ = machines_api
+        machines_api._handler.read.side_effect = CallError(
+            request={
+                "method": "GET",
+                "uri": "http://localhost:5240/MAAS/api/2.0/machines/",
+            },
+            response=Mock(status=400, reason="Bad Request"),
+            content=json.dumps({"tags": [f"No such tag(s): '{tag}'."]}).encode(),
+            call=None,
+        )
+        maas_client = MaasClient("http://localhost:5240/MAAS", "token", "resource")
+        mocker.patch.object(MaasClient, "from_deployment", return_value=maas_client)
+        step = MaasConfigSRIOVStep(Mock(), Mock(), Mock(), "openstack-machines")
+        mocker.patch.object(step, "_get_compute_machines", return_value=[])
+        write_answers = mocker.patch("sunbeam.core.questions.write_answers")
+
+        result = step.run(step_context)
+
+        machines_api._handler.read.assert_called_once_with(tags="network,resource")
+        write_answers.assert_not_called()
+        return result
+
+    def test_run_reports_missing_network_tag(self, mocker, step_context):
+        result = self._run_with_missing_tag(mocker, step_context, "network")
+
+        assert result.result_type == ResultType.FAILED
+        assert result.message == maas_steps.NETWORK_TAG_NEEDED_ERROR
+        assert "MAAS has no 'network' tag" in result.message
+        assert "Bad Request" not in result.message
+
+    def test_run_reports_other_missing_tag(self, mocker, step_context):
+        result = self._run_with_missing_tag(mocker, step_context, "resource")
+
+        assert result.result_type == ResultType.FAILED
+        assert "No such tag(s): 'resource'" in result.message
+        assert result.message != maas_steps.NETWORK_TAG_NEEDED_ERROR
+
     @pytest.fixture
     def machine(self):
         return {
