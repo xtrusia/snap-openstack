@@ -5,7 +5,7 @@ import ipaddress
 import logging
 import os
 import typing
-from collections.abc import Iterable
+from collections.abc import Iterable, MutableMapping
 
 LOG = logging.getLogger(__name__)
 
@@ -18,31 +18,63 @@ def patch_process_env(proxies: dict[str, str]) -> None:
     """
     if not proxies:
         return
+    process_proxies = {**proxies, "NO_PROXY": proxies.get("NO_PROXY", "")}
+    update_proxy_env(os.environ, process_proxies)
+
+
+def update_proxy_env(
+    env: MutableMapping[str, str],
+    proxies: dict[str, str],
+    *,
+    preserve_no_proxy: bool = False,
+) -> None:
+    """Add proxy settings to an environment mapping without changing the process."""
+    if not proxies:
+        return
     db_http_proxy = proxies.get("HTTP_PROXY")
     db_https_proxy = proxies.get("HTTPS_PROXY")
-    db_no_proxy = proxies.get("NO_PROXY", "").strip()
-    if db_http_proxy is None and db_https_proxy is None:
+    db_no_proxy = proxies.get("NO_PROXY")
+    if db_http_proxy is None and db_https_proxy is None and not preserve_no_proxy:
         LOG.debug("Proxy provided but no http(s)_proxy found")
         return
 
-    if db_https_proxy is None:
-        db_https_proxy = db_http_proxy
-    if db_http_proxy is None:
-        db_http_proxy = db_https_proxy
-
-    db_http_proxy = typing.cast(str, db_http_proxy).strip()
-    db_https_proxy = typing.cast(str, db_https_proxy).strip()
-
     new_env = {}
+    if db_http_proxy is not None or db_https_proxy is not None:
+        if db_https_proxy is None:
+            db_https_proxy = db_http_proxy
+        if db_http_proxy is None:
+            db_http_proxy = db_https_proxy
 
-    new_env["http_proxy"] = db_http_proxy
-    new_env["https_proxy"] = db_https_proxy
-    new_env["HTTP_PROXY"] = db_http_proxy
-    new_env["HTTPS_PROXY"] = db_https_proxy
-    new_env["no_proxy"] = db_no_proxy
-    new_env["NO_PROXY"] = db_no_proxy
-    LOG.debug("Patching process env with proxy settings")
-    os.environ.update(new_env)
+        db_http_proxy = typing.cast(str, db_http_proxy).strip()
+        db_https_proxy = typing.cast(str, db_https_proxy).strip()
+        new_env["http_proxy"] = db_http_proxy
+        new_env["https_proxy"] = db_https_proxy
+        new_env["HTTP_PROXY"] = db_http_proxy
+        new_env["HTTPS_PROXY"] = db_https_proxy
+    if db_no_proxy is not None:
+        db_no_proxy = db_no_proxy.strip()
+        if preserve_no_proxy:
+            inherited = env.get("NO_PROXY") or env.get("no_proxy", "")
+            db_no_proxy = ",".join(
+                dict.fromkeys(
+                    value.strip() for value in [inherited, db_no_proxy] if value.strip()
+                )
+            )
+        new_env["no_proxy"] = db_no_proxy
+        new_env["NO_PROXY"] = db_no_proxy
+    LOG.debug("Applying proxy environment settings")
+    env.update(new_env)
+
+
+def add_no_proxy_host(env: MutableMapping[str, str], host: str) -> None:
+    """Add a host to the effective no_proxy list in an environment mapping."""
+    inherited = env.get("NO_PROXY") or env.get("no_proxy", "")
+    entries = [value.strip() for value in inherited.split(",") if value.strip()]
+    if host not in entries:
+        entries.append(host)
+    no_proxy = ",".join(dict.fromkeys(entries))
+    env["NO_PROXY"] = no_proxy
+    env["no_proxy"] = no_proxy
 
 
 def should_bypass(no_proxies: Iterable[str], endpoint: str) -> bool:
