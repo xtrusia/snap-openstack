@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import os
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 import click
 import httpx
@@ -35,6 +37,7 @@ from sunbeam.core.manifest import (
     SoftwareConfig,
 )
 from sunbeam.core.openstack import OPENSTACK_MODEL
+from sunbeam.core.proxy import add_no_proxy_host, update_proxy_env
 from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.features.interface.v1.base import ConfigType, FeatureRequirement
 from sunbeam.features.interface.v1.openstack import (
@@ -73,6 +76,38 @@ LOG = logging.getLogger(__name__)
 console = Console()
 
 
+def _clusterctl_environment(kubeconfig: dict, proxy_settings: dict) -> dict[str, str]:
+    """Build a child environment that can reach the management API directly."""
+    env = os.environ.copy()
+    update_proxy_env(env, proxy_settings, preserve_no_proxy=True)
+    clusters = kubeconfig.get("clusters", [])
+    current_context = kubeconfig.get("current-context")
+    cluster_name = next(
+        (
+            item.get("context", {}).get("cluster")
+            for item in kubeconfig.get("contexts", [])
+            if item.get("name") == current_context
+        ),
+        None,
+    )
+    cluster = next(
+        (item for item in clusters if item.get("name") == cluster_name), None
+    )
+    if cluster is None and len(clusters) == 1:
+        cluster = clusters[0]
+    server = cluster.get("cluster", {}).get("server") if cluster else None
+    api_url = urlsplit(server) if server else None
+    if api_url and api_url.hostname:
+        api_host = api_url.hostname
+        api_port = api_url.port or {"http": 80, "https": 443}.get(api_url.scheme)
+        if api_port:
+            if ":" in api_host:
+                api_host = f"[{api_host}]"
+            api_host = f"{api_host}:{api_port}"
+        add_no_proxy_host(env, api_host)
+    return env
+
+
 def _clusterctl_error(stderr: str | bytes | None) -> str:
     """Extract the error lines from clusterctl output for display to the user.
 
@@ -109,6 +144,7 @@ class SetupClusterAPI(BaseStep):
         snap: Snap,
         machine_model: str,
         kubeconfig: dict,
+        proxy_settings: dict | None = None,
     ):
         super().__init__(
             "Setup Cluster API components",
@@ -119,6 +155,7 @@ class SetupClusterAPI(BaseStep):
         self.snap = snap
         self.machine_model = self.jhelper.get_model_name_with_owner(machine_model)
         self.kubeconfig = kubeconfig
+        self.proxy_settings = proxy_settings or {}
         self.micro_version_changed = False
 
     def is_skip(self, context: StepContext) -> Result:
@@ -330,7 +367,14 @@ class SetupClusterAPI(BaseStep):
                 ]
             )
             LOG.debug("Running clusterctl command: %s", cmd)
-            subprocess.run(cmd, check=True, timeout=360, capture_output=True, text=True)
+            subprocess.run(
+                cmd,
+                check=True,
+                timeout=360,
+                capture_output=True,
+                text=True,
+                env=_clusterctl_environment(self.kubeconfig, self.proxy_settings),
+            )
 
     def run(self, context: StepContext) -> Result:
         """Execute clusterctl init command."""
@@ -537,13 +581,14 @@ class DeleteKubeConfigSecretStep(BaseStep):
 class DeleteClusterAPI(BaseStep):
     """Delete Cluster API components."""
 
-    def __init__(self, client: Client, kubeconfig: dict):
+    def __init__(self, client: Client, kubeconfig: dict, proxy_settings: dict):
         super().__init__(
             "Delete Cluster API components",
             "Delete Cluster API components from management cluster",
         )
         self.client = client
         self.kubeconfig = kubeconfig
+        self.proxy_settings = proxy_settings
 
     def _get_workload_clusters(self) -> list:
         return list(self.kube.list(K8SHelper.get_cluster_resource(), namespace="*"))
@@ -561,7 +606,14 @@ class DeleteClusterAPI(BaseStep):
                 kubeconfig_file.name,
             ]
             LOG.debug("Running clusterctl command: %s", cmd)
-            subprocess.run(cmd, check=True, timeout=300, capture_output=True, text=True)
+            subprocess.run(
+                cmd,
+                check=True,
+                timeout=300,
+                capture_output=True,
+                text=True,
+                env=_clusterctl_environment(self.kubeconfig, self.proxy_settings),
+            )
 
     def _delete_capi_namespaces(self) -> None:
         capi_namespaces = [
@@ -896,6 +948,7 @@ class CaasFeature(OpenStackControlPlaneFeature):
                     self.snap,
                     deployment.openstack_machines_model,
                     kc_dict,
+                    proxy_settings,
                 ),
                 PatchCaaphProxyStep(client, proxy_settings),
                 TerraformInitStep(deployment.get_tfhelper(self.tfplan)),
@@ -946,7 +999,11 @@ class CaasFeature(OpenStackControlPlaneFeature):
         )
 
         plan = [
-            DeleteClusterAPI(client, self._get_kubeconfig(client)),
+            DeleteClusterAPI(
+                client,
+                self._get_kubeconfig(client),
+                deployment.get_proxy_settings(),
+            ),
             TerraformInitStep(tfhelper),
             DisableOpenStackApplicationStep(deployment, tfhelper, jhelper, self),
             DeleteKubeConfigSecretStep(deployment, jhelper),

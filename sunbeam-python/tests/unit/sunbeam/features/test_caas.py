@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
@@ -274,6 +275,112 @@ class TestClusterctlError:
     def test_bytes_input(self):
         stderr = b"Error: boom\n"
         assert _clusterctl_error(stderr) == "Error: boom"
+
+
+class TestSetupClusterAPIProxy:
+    @staticmethod
+    def _kubeconfig():
+        return {
+            "current-context": "active-context",
+            "contexts": [{"name": "active-context", "context": {"cluster": "active"}}],
+            "clusters": [
+                {"name": "inactive", "cluster": {"server": "https://192.0.2.1"}},
+                {"name": "active", "cluster": {"server": "https://10.1.2.3:6443"}},
+            ],
+        }
+
+    def test_clusterctl_inherits_environment_and_manifest_proxy(self):
+        """Clusterctl gets configured proxies and the existing environment."""
+        proxy_settings = {
+            "HTTP_PROXY": "http://proxy.example:3128",
+            "NO_PROXY": "localhost,127.0.0.1",
+        }
+        step = SetupClusterAPI(
+            Mock(),
+            Mock(),
+            Mock(),
+            "k8s",
+            self._kubeconfig(),
+            proxy_settings=proxy_settings,
+        )
+        step.snap.paths.snap = Path("/snap/openstack/current")
+
+        with (
+            patch.dict("os.environ", {"KEEP_ME": "value"}, clear=True),
+            patch("sunbeam.features.caas.feature.subprocess.run") as run,
+        ):
+            step._initialize_or_upgrade_capi()
+
+        env = run.call_args.kwargs["env"]
+        assert env["HTTP_PROXY"] == proxy_settings["HTTP_PROXY"]
+        assert env["HTTPS_PROXY"] == proxy_settings["HTTP_PROXY"]
+        assert env["NO_PROXY"] == "localhost,127.0.0.1,10.1.2.3:6443"
+        assert env["KEEP_ME"] == "value"
+
+    def test_clusterctl_merges_manifest_no_proxy_with_shell_proxy(self):
+        step = SetupClusterAPI(
+            Mock(),
+            Mock(),
+            Mock(),
+            "k8s",
+            self._kubeconfig(),
+            proxy_settings={"NO_PROXY": "mirror.internal"},
+        )
+        step.snap.paths.snap = Path("/snap/openstack/current")
+
+        with (
+            patch.dict(
+                "os.environ",
+                {"HTTPS_PROXY": "http://proxy.example:3128", "NO_PROXY": "localhost"},
+                clear=True,
+            ),
+            patch("sunbeam.features.caas.feature.subprocess.run") as run,
+        ):
+            step._initialize_or_upgrade_capi()
+
+        env = run.call_args.kwargs["env"]
+        assert env["NO_PROXY"] == "localhost,mirror.internal,10.1.2.3:6443"
+
+    def test_clusterctl_uses_effective_default_api_port(self):
+        entries = []
+        for server in ("https://10.1.2.3", "https://10.1.2.3:443"):
+            kubeconfig = self._kubeconfig()
+            kubeconfig["clusters"][1]["cluster"]["server"] = server
+            step = SetupClusterAPI(
+                Mock(),
+                Mock(),
+                Mock(),
+                "k8s",
+                kubeconfig,
+                proxy_settings={"HTTPS_PROXY": "http://proxy.example:3128"},
+            )
+            step.snap.paths.snap = Path("/snap/openstack/current")
+            with (
+                patch.dict("os.environ", {}, clear=True),
+                patch("sunbeam.features.caas.feature.subprocess.run") as run,
+            ):
+                step._initialize_or_upgrade_capi()
+            entries.append(run.call_args.kwargs["env"]["NO_PROXY"])
+
+        assert entries == ["10.1.2.3:443", "10.1.2.3:443"]
+
+    def test_clusterctl_bypasses_api_host_with_shell_proxy(self):
+        step = SetupClusterAPI(Mock(), Mock(), Mock(), "k8s", self._kubeconfig())
+        step.snap.paths.snap = Path("/snap/openstack/current")
+
+        with (
+            patch.dict(
+                "os.environ",
+                {"HTTPS_PROXY": "http://proxy.example:3128", "NO_PROXY": "localhost"},
+                clear=True,
+            ),
+            patch("sunbeam.features.caas.feature.subprocess.run") as run,
+        ):
+            step._initialize_or_upgrade_capi()
+
+        env = run.call_args.kwargs["env"]
+        assert env["HTTPS_PROXY"] == "http://proxy.example:3128"
+        assert env["NO_PROXY"] == "localhost,10.1.2.3:6443"
 
 
 class TestCaasDisablePlans:
