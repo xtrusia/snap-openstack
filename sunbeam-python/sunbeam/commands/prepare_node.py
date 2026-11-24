@@ -51,7 +51,7 @@ fi
 # Ensure dependency packages are installed
 for pkg in openssh-server curl sed; do
     dpkg -s $pkg &> /dev/null || {{
-        sudo apt install -y $pkg
+        sudo apt install -y $pkg || exit $?
     }}
 done
 
@@ -163,7 +163,7 @@ sudo snap refresh --hold openstack
 
 BOOTSTRAP_TEMPLATE = f"""
 # Install the lxd snap
-sudo snap install lxd --channel {LXD_CHANNEL}
+sudo snap install lxd --channel {LXD_CHANNEL} || exit $?
 USER=$(whoami)
 # Ensure current user is part of the LXD group
 sudo usermod --append --groups lxd $USER
