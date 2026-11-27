@@ -205,3 +205,51 @@ class TestEnableMaintenance:
         assert mock_cordon_step.call_args[0][0] == "test-node.example.com"
         mock_drain_step.assert_called_once()
         assert mock_drain_step.call_args[0][0] == "test-node.example.com"
+
+    @pytest.mark.parametrize(
+        "disable_cold_migration,expected_allowed_statuses",
+        [
+            (
+                True,
+                {
+                    "SHUTOFF",
+                    "STOPPED",
+                    "SUSPENDED",
+                    "SHELVED",
+                    "SHELVED_OFFLOADED",
+                    "SOFT_DELETED",
+                },
+            ),
+            (False, None),
+        ],
+    )
+    def test_verify_checks_inactive_instances_when_cold_migration_disabled(
+        self,
+        mock_deployment,
+        cluster_status,
+        resolved,
+        disable_cold_migration,
+        expected_allowed_statuses,
+    ):
+        with (
+            patch("sunbeam.features.maintenance.commands.JujuHelper"),
+            patch("sunbeam.features.maintenance.commands.run_preflight_checks"),
+            patch(
+                "sunbeam.features.maintenance.commands.checks.NoInstancesOnNodeCheck"
+            ) as mock_no_instances_check,
+            patch.object(
+                EnableMaintenance, "_get_hypervisor_name", return_value="test-node"
+            ),
+        ):
+            enable_maintenance = EnableMaintenance(
+                resolved=resolved,
+                deployment=mock_deployment,
+                cluster_status=cluster_status,
+                disable_cold_migration=disable_cold_migration,
+            )
+
+            enable_maintenance.verify(Mock())
+
+        assert mock_no_instances_check.call_args.kwargs["allowed_statuses"] == (
+            expected_allowed_statuses
+        )

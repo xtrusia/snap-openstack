@@ -150,7 +150,12 @@ class NoEphemeralDiskCheck(Check):
 
 class NoInstancesOnNodeCheck(Check):
     def __init__(
-        self, jhelper: JujuHelper, deployment: Deployment, node: str, force: bool
+        self,
+        jhelper: JujuHelper,
+        deployment: Deployment,
+        node: str,
+        force: bool,
+        allowed_statuses: set[str] | None = None,
     ):
         super().__init__(
             "Check no instance on the node",
@@ -160,6 +165,7 @@ class NoInstancesOnNodeCheck(Check):
         self.deployment = deployment
         self.node = node
         self.force = force
+        self.allowed_statuses = allowed_statuses
 
     def run(self, check_status: Status | None = None) -> bool:
         """Run the check logic here.
@@ -169,7 +175,13 @@ class NoInstancesOnNodeCheck(Check):
         """
         conn = get_admin_connection(self.jhelper, self.deployment)
 
-        instances = guests_on_hypervisor(hypervisor_name=self.node, conn=conn)
+        instances = [
+            inst
+            for inst in guests_on_hypervisor(hypervisor_name=self.node, conn=conn)
+            if self.allowed_statuses is None
+            or inst.status not in self.allowed_statuses
+            or inst.task_state is not None
+        ]
 
         if len(instances) > 0:
             instance_ids = ",".join([inst.id for inst in instances])

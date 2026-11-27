@@ -307,6 +307,18 @@ class EnableMaintenance(MaintenanceCommand):
                     deployment=self.deployment,
                     node=hypervisor_name,
                     force=self.force,
+                    allowed_statuses=(
+                        {
+                            "SHUTOFF",
+                            "STOPPED",
+                            "SUSPENDED",
+                            "SHELVED",
+                            "SHELVED_OFFLOADED",
+                            "SOFT_DELETED",
+                        }
+                        if self.disable_cold_migration
+                        else None
+                    ),
                 ),
             ]
 

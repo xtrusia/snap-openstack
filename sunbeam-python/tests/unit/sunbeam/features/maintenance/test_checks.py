@@ -175,6 +175,10 @@ class TestNoEphemeralDiskCheck:
 
 
 class TestNoInstanceOnNodeCheck:
+    @pytest.fixture
+    def allowed_statuses(self):
+        return {"SHUTOFF"}
+
     def test_run(self, mock_conn, mock_get_admin_connection, mock_guests_on_hypervisor):
         node = "node1"
         instances = []
@@ -203,6 +207,65 @@ class TestNoInstanceOnNodeCheck:
             conn=mock_conn,
         )
         assert check.message == f"Instances inst-0,inst-1 still on node {node}"
+
+    def test_run_allows_inactive_instances_when_cold_migration_is_disabled(
+        self,
+        allowed_statuses,
+        mock_conn,
+        mock_get_admin_connection,
+        mock_guests_on_hypervisor,
+    ):
+        mock_guests_on_hypervisor.return_value = [
+            Mock(id="stopped", status="SHUTOFF", task_state=None),
+        ]
+
+        check = checks.NoInstancesOnNodeCheck(
+            Mock(), Mock(), "node1", False, allowed_statuses=allowed_statuses
+        )
+
+        assert check.run()
+
+    @pytest.mark.parametrize(
+        "status",
+        ["ACTIVE", "PAUSED", "REBOOT", "HARD_REBOOT", "ERROR", "MIGRATING"],
+    )
+    def test_run_rejects_unexpected_statuses_when_cold_migration_is_disabled(
+        self,
+        allowed_statuses,
+        mock_conn,
+        mock_get_admin_connection,
+        mock_guests_on_hypervisor,
+        status,
+    ):
+        mock_guests_on_hypervisor.return_value = [
+            Mock(id="stopped", status="SHUTOFF", task_state=None),
+            Mock(id="unexpected", status=status, task_state=None),
+        ]
+
+        check = checks.NoInstancesOnNodeCheck(
+            Mock(), Mock(), "node1", False, allowed_statuses=allowed_statuses
+        )
+
+        assert not check.run()
+        assert check.message == "Instances unexpected still on node node1"
+
+    def test_run_rejects_allowed_status_with_an_inflight_task(
+        self,
+        allowed_statuses,
+        mock_conn,
+        mock_get_admin_connection,
+        mock_guests_on_hypervisor,
+    ):
+        mock_guests_on_hypervisor.return_value = [
+            Mock(id="starting", status="SHUTOFF", task_state="powering-on")
+        ]
+
+        check = checks.NoInstancesOnNodeCheck(
+            Mock(), Mock(), "node1", False, allowed_statuses=allowed_statuses
+        )
+
+        assert not check.run()
+        assert check.message == "Instances starting still on node node1"
 
     def test_run_force(
         self, mock_conn, mock_get_admin_connection, mock_guests_on_hypervisor
